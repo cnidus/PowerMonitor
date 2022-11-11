@@ -10,3 +10,8 @@ PZEM w/ explanation of how to set addresses (and code to work with ESPHome)
 https://github.com/Fionnoch/ESPHome_PZEM_Monitoring
 https://youtu.be/hao1jUYB5wI Part one
 https://www.youtube.com/watch?v=h9fNpurEkZI Part two
+
+
+### TODO
+
+Add Graphana + DB to the Home Assistant Pi
