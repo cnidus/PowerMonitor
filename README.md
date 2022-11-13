@@ -11,6 +11,9 @@ https://github.com/Fionnoch/ESPHome_PZEM_Monitoring
 https://youtu.be/hao1jUYB5wI Part one
 https://www.youtube.com/watch?v=h9fNpurEkZI Part two
 
+PZEM + oled
+
+http://radiopench.blog96.fc2.com/blog-entry-995.html
 
 ### TODO
 
