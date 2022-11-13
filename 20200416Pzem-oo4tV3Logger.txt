@@ -1,0 +1,209 @@
+/* AC power meter with text log
+  Measuring instrument:PZEM-004T v3.0
+  Display 0.96 inch OLED (SSD1306, 128x64)
+
+   Pin 10 energy clear button
+   Pin 11 Rx (Connects to the Tx pin on the PZEM)
+   Pin 12 Tx (Connects to the Rx pin on the PZEM)
+   2020/04/15 radiopench
+   http://radiopench.blog96.fc2.com/
+*/
+
+#include <EEPROM.h>
+#include <PZEM004Tv30.h>                     // PZEM004Tv3 library
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>                // 0.96inch OLED
+#include <MsTimer2.h>
+
+#define vCal 1.006                           // voltage calibration coefficient(dafault=1.0)
+#define iCal 0.9205                          // current calibration coefficient(dafault=1.0)
+
+#define entPin   9                           // enter button
+#define selPin  10                           // select button
+#define pzemRX  11                           // recieve data (connect to PZEM TX)
+#define pzemTX  12                           // send data    (connect to PZEM RX)
+
+Adafruit_SSD1306 oled(128, 64, &Wire, 4);    // OLED setup
+PZEM004Tv30 pzem(pzemRX, pzemTX);            // Pin11 to TX, Pin12 to RX
+
+unsigned int rangeTable[8] = {1, 2, 5, 10, 30, 60, 120, 300}; // time Inerval Table
+int rangeNumber;
+int timeToLog;                               // remaining time to output log
+
+float Vx, Ax, VAx, Wx, kWhx, PFx, Hzx, VARx; // measured value
+char buff[8];                                // character format buffer
+unsigned int logInterval;                    // log interval
+volatile boolean t2Flag = false;             // timing sync variable
+
+void setup() {
+  oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);    // set OLED I2C Address 0x3C or 0x3D
+  Serial.begin(115200);
+  pinMode(entPin, INPUT_PULLUP);             // enter button
+  pinMode(selPin, INPUT_PULLUP);             // select button
+
+  rangeNumber = EEPROM.read(0);
+  if (rangeNumber > 7) {                     // abnormal range number will be
+    rangeNumber = 0;                         // set to 0
+  }
+  logInterval = rangeTable[rangeNumber];
+
+  oled.clearDisplay();
+  oled.display();
+  oled.setTextColor(WHITE);                  // write with white character
+
+  if (digitalRead(entPin) == LOW) {
+    recIntervalSet();
+  }
+
+  startScreen();                             // show start screen
+  Serial.println();                          // start message
+  Serial.println(F(" , PZEM-004V3 Power meter start V0.5"));
+  Serial.println(F(" , sec, V(rms), I(rms), VA, W, PF, kWh, Hz"));
+  Serial.flush();
+
+  timeToLog = logInterval;                   // set interval
+  measure();                                 // get value from PZEM-004Tv3
+  logPrint();                                // data out serial port
+  oledDisplay();                             // display data on OLED
+
+  MsTimer2::set(1000, timer2IRQ);            // IRQ interval 1sec
+  MsTimer2::start();
+}
+
+void loop() {
+  if (digitalRead(selPin) == LOW) {          // if select button pushed during running
+    resetKWh();                              // clear the energy value
+  }
+  while (t2Flag == false) {                  // wait MsTimer2 IRQ
+  }
+  t2Flag = false;
+
+  measure();                                 // get value from PZEM-004Tv3
+  timeToLog --;                              // decrement log timer
+  oledDisplay();                             // display present data to OLED
+  if (timeToLog == 0 ) {                     // if log interval time is up,
+    logPrint();                              // output log data to serial port
+    timeToLog = logInterval;                 // set value for next cycle
+  }
+}            // end of loop
+
+void measure() {                             // read values from PZEM-004T v3
+  Vx = vCal * pzem.voltage();                // voltage(apply calibration correction)
+  Ax = iCal * pzem.current();                // current(apply calibration correction)
+  VAx = Vx * Ax;                             // calculate apparent power
+  Wx = vCal * iCal * pzem.power();           // effective power(Use the value after calibration correction)
+  PFx = pzem.pf();                           // power factor
+  kWhx = vCal * iCal * pzem.energy();        // sum of energy(Use the value after calibration correction)
+  Hzx = pzem.frequency();                    // line frequency
+}
+
+void logPrint() {                               // serial out for log
+  static long t = 0;
+  Serial.print(F(" , "));                       // this for the separator for terminal software timestamp text
+  Serial.print(t); Serial.print(F(", "));       // time in second
+  Serial.print(Vx, 1); Serial.print(F(", "));   // voltage
+  Serial.print(Ax, 3); Serial.print(F(", "));   // current amps
+  Serial.print(VAx, 2); Serial.print(F(", "));  // VA value
+  Serial.print(Wx, 1); Serial.print(F(", "));   // wattage
+  Serial.print(PFx, 2); Serial.print(F(", "));  // powewr factor
+  Serial.print(kWhx, 3); Serial.print(F(", ")); // totall energy
+  Serial.print(Hzx, 1);                         // frequency
+  Serial.println();
+  t += logInterval;                             // increment accumurate time
+}
+
+void oledDisplay() {                                // display information on OLED
+  oled.clearDisplay();                              // clear display buffer
+  oled.setTextSize(2);                              // double size character
+
+  dtostrf(Wx, 6, 1, buff);                          // format nnnn.n
+  oled.setCursor(0, 0);
+  oled.print(buff); oled.print(F("W"));             // display power value
+
+  oled.setTextSize(1);                              // standerd size character
+  oled.setCursor(110, 8);
+  sprintf(buff, "%3d", timeToLog);                  // format decimal 3-digit
+  oled.print(buff);                                 // remainig time display
+  if (timeToLog == 0) {                             // if time up
+    oled.setCursor(110, 0); oled.print(F("Log"));   // display "Log" at top right
+  }
+
+  dtostrf(Vx, 5, 1, buff); oled.setCursor(0, 16); oled.print(F("V:"));
+  oled.print(buff); oled.print(F("V"));             // voltage nnn.n
+
+  dtostrf(Ax, 6, 3, buff); oled.setCursor(56, 16); oled.print(F("I: "));
+  oled.print(buff); oled.print(F("A"));             // amps nn.nnn
+
+  dtostrf(VAx, 7, 2, buff); oled.setCursor(0, 26); oled.print(F("Pappa:"));
+  oled.print(buff); oled.print(F(" VA"));           // volt amps nnnn.nn
+
+  dtostrf(kWhx, 7, 3, buff); oled.setCursor(0, 36); oled.print("Energ");
+  oled.print(buff); oled.print(F(" kWh"));          // watt hours nnn.nnn
+
+
+  dtostrf(Hzx, 4, 1, buff); oled.setCursor(0, 46); oled.print(F("Freq :   "));
+  oled.print(buff); oled.print(F(" Hz"));           // fequency nn.n
+
+  dtostrf(PFx * 100.0, 3, 0, buff); oled.setCursor(0, 56); oled.print(F("PF:"));
+  oled.print(buff); oled.print(F("% Y    Y    Y")); // power factor nnn
+  oled.fillRect(50, 61, (60 * PFx) + 1, 3, WHITE);  // Power factor bar
+
+  oled.display();                                   // actual display will be done at here
+}
+
+void recIntervalSet() {                             // Log interval time setting by button swith
+  while (digitalRead(entPin) == LOW) {              // wait till the enter button is released
+    oled.clearDisplay(); oled.setCursor(0, 0);
+    oled.print(F("Log interval setting"));          // start message
+    oled.display();
+  }
+  delay(30);
+
+  while (digitalRead(entPin) == HIGH) {
+    oled.clearDisplay();
+    oled.setTextSize(2);                            // double size character
+    oled.setCursor(0, 0);
+    oled.println(F("Set Int."));                    // display set interaval value
+
+    oled.setCursor(35, 30);
+    oled.print(logInterval); oled.print(F("sec"));  // display the value
+    oled.display();
+
+    if (digitalRead(selPin) == LOW) {
+      rangeNumber ++;                               // increment range number
+      if (rangeNumber > 7) {                        // if beyond upper limit
+        rangeNumber = 0;                            // circulate the number
+      }
+      logInterval = rangeTable[rangeNumber];        // set interval time from table
+    }
+    while (digitalRead(selPin) == LOW) {            // wait select botton relesed
+    }
+    delay(30);
+  }
+
+  EEPROM.write(0, rangeNumber);                     // save value to EEPROM
+}
+
+void startScreen() {                                // start message
+  oled.clearDisplay(); oled.setTextSize(2);         // double size character
+  oled.setCursor(0, 0);
+  oled.println(F("PZEM-004T"));
+  oled.println();
+  oled.print(F("int.="));
+  oled.print(logInterval); oled.print(F("s"));      // display log interval
+  oled.display();
+  delay(2000);
+}
+
+void resetKWh() {                   // clear accumulated energy value
+  Serial.println(F("Reset kWh"));   // write message on the log
+  pzem.resetEnergy();               // reset value
+  oled.clearDisplay();              // erase disp. to show command accepted
+  oled.display();
+  delay(50);
+}
+
+void timer2IRQ() {                  // MsTimer2 IRQ
+  t2Flag = true;                    // set flag for loop
+}
